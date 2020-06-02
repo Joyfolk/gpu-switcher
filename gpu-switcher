@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+
+declare CONFIG=/etc/gpu-switcher/gpu-switcher.conf
+
+declare MODE=AUTO
+
+declare XCONF_INTEL=/etc/gpu-switcher/21-intel.conf
+declare XCONF_NVIDIA=/etc/gpu-switcher/21-nvidia.conf
+declare XCONF_EGPU=/etc/gpu-switcher/21-egpu.conf
+declare TARGET_CONF=/etc/X11/xorg.conf.d/21-gpu-switcher.conf
+declare BACKUP_CONF="$TARGET_CONF.bak"
+
+# check if the script is run as root
+if [ $EUID -ne 0 ]; then 
+  	logger -s "gpu-switcher: should be executed as root"
+  	exit 1
+fi
+
+# read config and get work MODE 
+# config format: 
+#   MODE: AUTO | INTEL | NVIDIA | EGPU
+while read line; do
+    if echo $line | grep -F "MODE:" &>/dev/null; then
+	    MODE=$(echo "$line" | cut -d ':' -f 2| xargs)
+    fi
+done < $CONFIG
+
+# backup
+if test -f "$TARGET_CONF"; then
+    if [ diff -q $TARGET_CONF $XCONF_INTEL &>/dev/null ] && [ diff -q $TARGET_CONF $XCONF_NVIDIA &>/dev/null ] && [ diff -q $TARGET_CONF $XCONF_EGPU &>/dev/null ]; then 
+        mv -f "$TARGET_CONF" "$BACKUP_CONF"
+    fi
+fi
+
+# detect if EGPU available
+declare EGPU_AVAILABLE=false
+declare -i i=0
+while [ $i -lt 5 ]; do # waiting for egpu to init
+  declare -i NVIDIA_COUNT=$(lspci|grep VGA|grep NVIDIA|wc -l)
+  if [ $NVIDIA_COUNT -eq 2 ]; then
+    EGPU_AVAILABLE=true
+    break
+  fi
+  logger -s "gpu-switcher: waiting for EGPU" 
+  let i++
+  sleep $i
+done  
+
+# detect if AC available
+declare AC_AVAILABLE=false
+if [ $(acpi -a | cut -d' ' -f3 | cut -d- -f1) == 'on' ]; then
+  AC_AVAILABLE=true
+fi
+
+logger -s "gpu-switcher: egpu=$EGPU_AVAILABLE ac=$AC_AVAILABLE mode=$MODE"
+
+# autodetect mode
+if [ $MODE == "AUTO" ]; then
+    if $EGPU_AVAILABLE; then
+        MODE="EGPU"
+    elif $AC_AVAILABLE; then
+        MODE="NVIDIA"
+    else
+        MODE="INTEL"
+    fi
+fi
+
+# log current mode
+logger -s "gpu-switcher: using $MODE"
+
+# install mode configuration
+case $MODE in
+    EGPU)
+        cp -f $XCONF_EGPU $TARGET_CONF
+        ;;    
+    NVIDIA)
+        cp -f $XCONF_NVIDIA $TARGET_CONF
+        ;;
+    *)
+        cp -f $XCONF_INTEL $TARGET_CONF
+esac
+        

@@ -1,0 +1,9 @@
+[Unit]
+Description=GPU switching service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/gpu-switcher 
+
+[Install]
+WantedBy=multi-user.target
